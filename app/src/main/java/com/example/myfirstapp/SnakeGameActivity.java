@@ -8,15 +8,10 @@ import android.graphics.Paint;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.os.Bundle;
-import android.os.Handler;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import android.view.View;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.Random;
 
@@ -81,9 +76,10 @@ public class SnakeGameActivity extends Activity {
         // Puntuación
         private int score;
 
-        // Control de FPS
-        private long fps;
-        private long timeThisFrame;
+        // Control de tiempo mejorado
+        private long lastFrameTime;
+        private final long TARGET_FPS = 10;
+        private final long FRAME_TIME = 1000 / TARGET_FPS;
 
         // Botones de control
         private Rect upButton;
@@ -104,22 +100,26 @@ public class SnakeGameActivity extends Activity {
 
             surfaceHolder = getHolder();
             paint = new Paint();
+            paint.setAntiAlias(true);
 
-            // Inicializar botones de control
+            // Inicializar botones de control con mejor posicionamiento
             int buttonSize = blockSize * 3;
             int margin = blockSize;
 
-            upButton = new Rect(screenX / 2 - buttonSize / 2, screenY - buttonSize * 4 - margin * 3,
-                    screenX / 2 + buttonSize / 2, screenY - buttonSize * 3 - margin * 3);
+            // Posicionar botones en la parte inferior
+            int controlAreaY = screenY - buttonSize * 5;
 
-            downButton = new Rect(screenX / 2 - buttonSize / 2, screenY - buttonSize - margin,
-                    screenX / 2 + buttonSize / 2, screenY - margin);
+            upButton = new Rect(screenX / 2 - buttonSize / 2, controlAreaY,
+                    screenX / 2 + buttonSize / 2, controlAreaY + buttonSize);
 
-            leftButton = new Rect(screenX / 2 - buttonSize * 2 - margin, screenY - buttonSize * 2 - margin * 2,
-                    screenX / 2 - buttonSize - margin, screenY - buttonSize - margin * 2);
+            downButton = new Rect(screenX / 2 - buttonSize / 2, controlAreaY + buttonSize * 2,
+                    screenX / 2 + buttonSize / 2, controlAreaY + buttonSize * 3);
 
-            rightButton = new Rect(screenX / 2 + buttonSize + margin, screenY - buttonSize * 2 - margin * 2,
-                    screenX / 2 + buttonSize * 2 + margin, screenY - buttonSize - margin * 2);
+            leftButton = new Rect(screenX / 2 - buttonSize * 2, controlAreaY + buttonSize,
+                    screenX / 2 - buttonSize, controlAreaY + buttonSize * 2);
+
+            rightButton = new Rect(screenX / 2 + buttonSize, controlAreaY + buttonSize,
+                    screenX / 2 + buttonSize * 2, controlAreaY + buttonSize * 2);
 
             startGame();
         }
@@ -129,14 +129,21 @@ public class SnakeGameActivity extends Activity {
             while (playing) {
                 long startFrameTime = System.currentTimeMillis();
 
-                if (!updateRequired()) {
+                // Solo actualizar si ha pasado suficiente tiempo
+                if (updateRequired()) {
                     updateGame();
-                    drawGame();
                 }
 
-                timeThisFrame = System.currentTimeMillis() - startFrameTime;
-                if (timeThisFrame >= 1) {
-                    fps = 1000 / timeThisFrame;
+                drawGame();
+
+                // Controlar la velocidad del juego
+                long frameTime = System.currentTimeMillis() - startFrameTime;
+                if (frameTime < FRAME_TIME) {
+                    try {
+                        Thread.sleep(FRAME_TIME - frameTime);
+                    } catch (InterruptedException e) {
+                        // Manejar interrupción
+                    }
                 }
             }
         }
@@ -144,7 +151,9 @@ public class SnakeGameActivity extends Activity {
         public void pause() {
             playing = false;
             try {
-                thread.join();
+                if (thread != null) {
+                    thread.join();
+                }
             } catch (InterruptedException e) {
                 // Error
             }
@@ -168,12 +177,36 @@ public class SnakeGameActivity extends Activity {
 
             // Reiniciar puntuación
             score = 0;
+
+            // Reiniciar tiempo
+            lastFrameTime = System.currentTimeMillis();
         }
 
         public void spawnBob() {
             Random random = new Random();
-            bobX = random.nextInt(NUM_BLOCKS_WIDE - 1) + 1;
-            bobY = random.nextInt(numBlocksHigh - 1) + 1;
+            boolean validPosition = false;
+
+            // Asegurar que la comida no aparezca en el área de controles
+            int maxY = numBlocksHigh - 8; // Evitar área de botones
+
+            while (!validPosition) {
+                bobX = random.nextInt(NUM_BLOCKS_WIDE - 1) + 1;
+                bobY = random.nextInt(maxY - 1) + 1;
+
+                // Verificar que no esté en la serpiente
+                validPosition = true;
+                for (Point segment : snakeXYs) {
+                    if (segment.x == bobX && segment.y == bobY) {
+                        validPosition = false;
+                        break;
+                    }
+                }
+
+                // Verificar que no esté en la cabeza
+                if (headX == bobX && headY == bobY) {
+                    validPosition = false;
+                }
+            }
         }
 
         private void eatBob() {
@@ -186,17 +219,21 @@ public class SnakeGameActivity extends Activity {
         }
 
         private void moveSnake() {
+            // Añadir nuevo segmento si es necesario
+            if (snakeXYs.size() < snakeLength) {
+                snakeXYs.add(new Point());
+            }
+
             // Mover el cuerpo
-            for (int i = snakeXYs.size() - 1; i >= 0; i--) {
-                if (i == 0) {
-                    // Mover la cabeza
-                    snakeXYs.get(0).x = headX;
-                    snakeXYs.get(0).y = headY;
-                } else {
-                    // Mover el cuerpo
-                    snakeXYs.get(i).x = snakeXYs.get(i - 1).x;
-                    snakeXYs.get(i).y = snakeXYs.get(i - 1).y;
-                }
+            for (int i = snakeXYs.size() - 1; i > 0; i--) {
+                snakeXYs.get(i).x = snakeXYs.get(i - 1).x;
+                snakeXYs.get(i).y = snakeXYs.get(i - 1).y;
+            }
+
+            // Mover el primer segmento a la posición anterior de la cabeza
+            if (snakeXYs.size() > 0) {
+                snakeXYs.get(0).x = headX;
+                snakeXYs.get(0).y = headY;
             }
 
             // Mover la cabeza en la dirección actual
@@ -223,12 +260,13 @@ public class SnakeGameActivity extends Activity {
             if (headX == -1) dead = true;
             if (headX >= NUM_BLOCKS_WIDE) dead = true;
             if (headY == -1) dead = true;
-            if (headY >= numBlocksHigh) dead = true;
+            if (headY >= numBlocksHigh - 8) dead = true; // Considerar área de botones
 
             // Comerse a sí mismo
-            for (int i = 0; i < snakeXYs.size(); i++) {
-                if (headX == snakeXYs.get(i).x && headY == snakeXYs.get(i).y) {
+            for (Point segment : snakeXYs) {
+                if (headX == segment.x && headY == segment.y) {
                     dead = true;
+                    break;
                 }
             }
 
@@ -241,14 +279,15 @@ public class SnakeGameActivity extends Activity {
                 eatBob();
             }
 
-            // ¿Necesitamos agregar un nuevo segmento al cuerpo de la serpiente?
-            if (snakeXYs.size() < snakeLength) {
-                snakeXYs.add(new Point());
-            }
-
             moveSnake();
 
             if (detectDeath()) {
+                // Pequeña pausa antes de reiniciar
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    // Manejar interrupción
+                }
                 startGame();
             }
         }
@@ -263,18 +302,19 @@ public class SnakeGameActivity extends Activity {
                 // Configurar el pincel para la serpiente
                 paint.setColor(Color.argb(255, 255, 255, 255));
 
-                // Dibujar la serpiente
-                for (int i = 0; i < snakeXYs.size(); i++) {
-                    canvas.drawRect(snakeXYs.get(i).x * blockSize,
-                            (snakeXYs.get(i).y * blockSize),
-                            (snakeXYs.get(i).x * blockSize) + blockSize,
-                            (snakeXYs.get(i).y * blockSize) + blockSize,
+                // Dibujar el cuerpo de la serpiente
+                for (Point segment : snakeXYs) {
+                    canvas.drawRect(segment.x * blockSize,
+                            segment.y * blockSize,
+                            (segment.x * blockSize) + blockSize,
+                            (segment.y * blockSize) + blockSize,
                             paint);
                 }
 
-                // Dibujar la cabeza
+                // Dibujar la cabeza con color diferente
+                paint.setColor(Color.argb(255, 200, 255, 200));
                 canvas.drawRect(headX * blockSize,
-                        (headY * blockSize),
+                        headY * blockSize,
                         (headX * blockSize) + blockSize,
                         (headY * blockSize) + blockSize,
                         paint);
@@ -282,39 +322,53 @@ public class SnakeGameActivity extends Activity {
                 // Dibujar la comida
                 paint.setColor(Color.argb(255, 255, 0, 0));
                 canvas.drawRect(bobX * blockSize,
-                        (bobY * blockSize),
+                        bobY * blockSize,
                         (bobX * blockSize) + blockSize,
                         (bobY * blockSize) + blockSize,
                         paint);
 
-                // Dibujar controles
-                paint.setColor(Color.argb(100, 255, 255, 255));
+                // Dibujar controles con mejor visibilidad
+                paint.setColor(Color.argb(120, 255, 255, 255));
                 canvas.drawRect(upButton, paint);
                 canvas.drawRect(downButton, paint);
                 canvas.drawRect(leftButton, paint);
                 canvas.drawRect(rightButton, paint);
 
+                // Dibujar bordes de los botones
+                paint.setColor(Color.argb(180, 255, 255, 255));
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(3);
+                canvas.drawRect(upButton, paint);
+                canvas.drawRect(downButton, paint);
+                canvas.drawRect(leftButton, paint);
+                canvas.drawRect(rightButton, paint);
+                paint.setStyle(Paint.Style.FILL);
+
                 // Dibujar texto en los botones
-                paint.setColor(Color.argb(255, 255, 255, 255));
-                paint.setTextSize(blockSize);
-                canvas.drawText("↑", upButton.centerX() - blockSize/3, upButton.centerY() + blockSize/3, paint);
-                canvas.drawText("↓", downButton.centerX() - blockSize/3, downButton.centerY() + blockSize/3, paint);
-                canvas.drawText("←", leftButton.centerX() - blockSize/3, leftButton.centerY() + blockSize/3, paint);
-                canvas.drawText("→", rightButton.centerX() - blockSize/3, rightButton.centerY() + blockSize/3, paint);
+                paint.setColor(Color.argb(255, 0, 0, 0));
+                paint.setTextSize(blockSize * 1.5f);
+                paint.setTextAlign(Paint.Align.CENTER);
+
+                canvas.drawText("↑", upButton.centerX(), upButton.centerY() + blockSize/2, paint);
+                canvas.drawText("↓", downButton.centerX(), downButton.centerY() + blockSize/2, paint);
+                canvas.drawText("←", leftButton.centerX(), leftButton.centerY() + blockSize/2, paint);
+                canvas.drawText("→", rightButton.centerX(), rightButton.centerY() + blockSize/2, paint);
 
                 // Dibujar la puntuación
                 paint.setColor(Color.argb(255, 255, 255, 255));
                 paint.setTextSize(blockSize * 2);
-                canvas.drawText("Puntuación:" + score, blockSize, blockSize * 2, paint);
+                paint.setTextAlign(Paint.Align.LEFT);
+                canvas.drawText("Puntuación: " + score, blockSize, blockSize * 2, paint);
 
                 surfaceHolder.unlockCanvasAndPost(canvas);
             }
         }
 
         public boolean updateRequired() {
-            // Solo actualizar cada 10 frames
-            final long TARGET_FPS = 10;
-            if (fps >= TARGET_FPS) {
+            // Verificar si es tiempo de actualizar el juego
+            long currentTime = System.currentTimeMillis();
+            if (currentTime - lastFrameTime >= FRAME_TIME) {
+                lastFrameTime = currentTime;
                 return true;
             }
             return false;
